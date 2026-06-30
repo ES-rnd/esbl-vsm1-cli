@@ -174,8 +174,8 @@ def _maybe_write_csv(value: str, ch_name: str, decoded) -> None:
 
     try:
         ts_iso = datetime.now(timezone.utc).isoformat()
-        ts_ns = time.time_ns()
-        sink.write_rows(rows_fn(ch_name, decoded, ts_iso, ts_ns))
+        ts_ms = int(time.time() * 1000)
+        sink.write_rows(rows_fn(ch_name, decoded, ts_iso, ts_ms))
     except (OSError, ValueError) as e:
         print(f"[{ch_name}] csv write error: {e}")
 

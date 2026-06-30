@@ -20,13 +20,13 @@ PARAMS = {
 CSV_HEADER = ["t_host_iso", "t_host_ns", "channel", "temperature_c"]
 
 
-def csv_rows(ch_name, decoded, ts_iso, ts_ns) -> Any:
+def csv_rows(ch_name, decoded, ts_iso, ts_ms) -> Any:
     """
         One row per notification: (iso, ns, channel, temperature).
     """
 
     if isinstance(decoded, (int, float)):
-        yield (ts_iso, ts_ns, ch_name, float(decoded))
+        yield (ts_iso, ts_ms, ch_name, float(decoded))
 
 
 def encode_config(params: dict) -> bytes:

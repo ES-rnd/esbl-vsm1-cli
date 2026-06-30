@@ -40,7 +40,7 @@ CSV_HEADER = [
 ]
 
 
-def csv_rows(ch_name, decoded, ts_iso, ts_ns) -> Any:
+def csv_rows(ch_name, decoded, ts_iso, ts_ms) -> Any:
     """50 rows per notification (long format). Frame scalars repeated."""
     if not isinstance(decoded, dict):
         return
@@ -61,7 +61,7 @@ def csv_rows(ch_name, decoded, ts_iso, ts_ns) -> Any:
     n = min(len(freqs), len(mags))
 
     for i in range(n):
-        yield (ts_iso, ts_ns, ch_name, axis, i,
+        yield (ts_iso, ts_ms, ch_name, axis, i,
                freqs[i], mags[i],
                rms, crest, kurt, vel_rms, disp_rms)
 

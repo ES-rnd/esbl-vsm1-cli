@@ -57,13 +57,13 @@ SAMPLE_RATES = {
 CSV_HEADER = ["t_host_iso", "t_host_ns", "channel", "x", "y", "z"]
 
 
-def csv_rows(ch_name, decoded, ts_iso, ts_ns) -> Any:
+def csv_rows(ch_name, decoded, ts_iso, ts_ms) -> Any:
     """
         One row per notification carrying xyz floats.
         `channel` distinguishes accel_low vs accel_high in a single file.
     """
     if isinstance(decoded, (tuple, list)) and len(decoded) >= 3:
-        yield (ts_iso, ts_ns, ch_name,
+        yield (ts_iso, ts_ms, ch_name,
                float(decoded[0]), float(decoded[1]), float(decoded[2]))
 
 

@@ -61,7 +61,7 @@ python -m pip install -r requirements.txt
 ### 4. Run
 
 ```bash
-python -m ess_cli
+python -m esbl_vsm1-cli
 ```
 
 You should see:
