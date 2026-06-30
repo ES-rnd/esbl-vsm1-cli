@@ -1,0 +1,17 @@
+[project]
+name = "ess-cli"
+version = "0.1.0"
+description = "Interactive BLE CLI for ESS smart sensor devices."
+requires-python = ">=3.10"
+dependencies = [
+    "bleak>=0.22.0",
+    "prompt_toolkit>=3.0.43",
+    "matplotlib>=3.8.0",
+    "colorlog>=6.8.0",
+]
+
+[project.optional-dependencies]
+dev = ["pylint>=3.0", "flake8>=7.0", "pyright>=1.1.350"]
+
+[project.scripts]
+ess-cli = "ess_cli.main:_entry"

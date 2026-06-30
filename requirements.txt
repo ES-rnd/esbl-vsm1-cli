@@ -1,0 +1,16 @@
+# ──────────────────────────────────────────────────────────────
+# ESS BLE CLI — runtime dependencies
+# ──────────────────────────────────────────────────────────────
+
+# BLE transport (cross-platform: Windows / Linux / macOS)
+bleak>=0.22.0
+
+# Interactive REPL: dynamic prompt, async input, autocomplete, patch_stdout
+prompt_toolkit>=3.0.43
+
+# Live plotting (used by plotting.py: LivePlot, LiveBarPlot)
+matplotlib>=3.8.0
+
+# Optional but recommended: colored logger (graceful fallback if missing,
+# but you've been using it in scanner output).
+colorlog>=6.8.0
