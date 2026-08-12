@@ -16,6 +16,7 @@ COMMANDS = [
     "subscribe", "unsubscribe",
     "record", "stop_record",
     "configure",
+    "update",
     "clear", "help", "exit",
 ]
 
@@ -62,8 +63,9 @@ class EssCompleter(Completer):
                         )
             return
 
-        # 3) configure → -module <name> / -<param> <value>  (schema-driven per sensor)  # noqa
-        if cmd == "configure":
+        # 3) configure → -module <name> / -<param> <value>  (schema-driven per sensor)  # noqa            
+
+        if cmd == "configure" or cmd == "update":
             next_is_partial = not text.endswith(" ")
             partial = tokens[-1] if next_is_partial else ""
             prev = tokens[-2 if next_is_partial else -1] if len(tokens) > 1 else ""     # noqa

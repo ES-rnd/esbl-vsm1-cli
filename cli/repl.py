@@ -12,7 +12,7 @@ from .prompt import make_prompt
 from .commands.scan import cmd_scan, cmd_stop, cmd_list_devices, cmd_clear
 from .commands.connection import cmd_connect, cmd_disconnect
 from .commands.gatt import cmd_list_services, cmd_list_characteristics
-from .commands.sensors import cmd_subscribe, cmd_unsubscribe, cmd_configure, cmd_record, cmd_stop_record    # noqa
+from .commands.sensors import cmd_subscribe, cmd_unsubscribe, cmd_configure, cmd_update, cmd_record, cmd_stop_record    # noqa
 from .commands.help import cmd_help
 
 
@@ -126,7 +126,7 @@ async def repl(stop: asyncio.Event):
                 await cmd_list_characteristics(svc)
 
             # configure -module <sensor> [-<param> <value> ...]   schema-driven
-            elif cmd == "configure":
+            elif cmd == "configure" or cmd == "update":
                 module = _extract_flag(args, "-module")
                 if module is None:
                     print("Usage: configure -module <sensor> [-<param> <value> ...]")   # noqa
@@ -156,7 +156,10 @@ async def repl(stop: asyncio.Event):
                         i += 1
 
                 if ok:
-                    await cmd_configure(module, kv)
+                    if cmd == "configure":
+                        await cmd_configure(module, kv)
+                    elif cmd == "update":
+                        await cmd_update(module, kv)
 
             else:
                 print(f"Unknown command: {cmd}  (try `help`)")

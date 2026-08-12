@@ -6,6 +6,7 @@ from typing import Any
 import time
 from datetime import datetime, timezone
 from pathlib import Path
+import struct, zlib
 
 from bleak.exc import BleakError
 
@@ -216,6 +217,7 @@ async def cmd_configure(value: str, kv: dict):
         Reads current config first, merges in user-supplied kv, validates,
         writes, and reads back to confirm.
     """
+
     if not require_connected():
         return
 
@@ -325,8 +327,166 @@ async def cmd_configure(value: str, kv: dict):
     except (KeyError, NameError, AttributeError, TypeError) as e:
         print(f"⚠️  Title refresh skipped (non-fatal): {type(e).__name__}: {e}")     # noqa
 
+async def cmd_update(value: str, kv: dict):
+    """
+        One-way FOTA benchmark: stream N packets on DATA_UUID back-to-back
+        WITHOUT waiting per packet. A notification callback records every
+        ACK'd packet id. After streaming (plus a drain window) it reports
+        total time/throughput and prints any packet ids that never ACK'd.
+    """
 
-# ═════════════════════════════════════════════
+    if not require_connected():
+        return
+
+    if value not in SENSOR_REGISTRY:
+        print(f"⚠️  Unknown -value '{value}'. Available: {list(SENSOR_REGISTRY)}")  # noqa
+        return
+
+    mod = SENSOR_REGISTRY[value]
+
+    # ── Packet geometry ──────────────────────────────────────────
+    RESERVED    = b"\x00" * 10     # 10 reserved zero bytes
+    PAYLOAD_LEN = 14 * 16          # 224 bytes
+    N_PACKETS   = 1700
+
+    # ── Streaming / feedback params ──────────────────────────────
+    FB_LEN        = 8              # expected feedback length (bytes)
+    PACE_S        = 0.0075         # inter-packet pacing (set 0.0 for max rate)
+    DRAIN_S       = 2.0            # wait after last send for stragglers
+    loop          = asyncio.get_running_loop()
+
+    # ── ACK bookkeeping (populated by the notification callback) ──
+    acked: set[int]      = set()   # unique ids that ACK'd
+    ack_order: list[int] = []      # every ACK, in arrival order (to spot dupes)
+    bad_len              = 0       # ACKs with unexpected length
+
+    def _fb_cb(_handle, data) -> None:
+        nonlocal bad_len
+        if len(data) < 3:
+            bad_len += 1
+            return
+        if len(data) != FB_LEN:
+            bad_len += 1
+            # still parse the id — length mismatch is informational
+        ack_id = data[1] + (data[2] << 8)
+        ack_order.append(ack_id)
+        acked.add(ack_id)
+
+    # ── Resolve + validate feedback characteristic BEFORE subscribing ──
+    fb_uuid = getattr(mod, "FB_UUID", None)
+    if fb_uuid is None:
+        print(f"❌ '{value}' module has no FB_UUID defined.")
+        return
+
+    fb_char = ctx.client.services.get_characteristic(fb_uuid)
+    if fb_char is None:
+        print(f"❌ Feedback char {fb_uuid} not found in the GATT table.")
+        return
+
+    props = fb_char.properties
+    if "notify" not in props and "indicate" not in props:
+        print(f"❌ {fb_uuid} is not notifiable (props={props}).")
+        return
+
+    # 1) Subscribe to feedback FIRST so no early ACK is missed
+    try:
+        await ctx.client.start_notify(fb_uuid, _fb_cb)
+    except (BleakError, OSError) as e:
+        print(f"❌ Could not subscribe to feedback {fb_uuid}: {e}")
+        return
+
+    sent      = 0
+    sent_ids  = set()
+    t_start   = time.perf_counter()
+
+    try:
+        # ── Stream all packets, no per-packet wait ──
+        for i in range(N_PACKETS):
+            payload = bytes((1 + j) & 0xFF for j in range(PAYLOAD_LEN))
+            body = (
+                struct.pack("<H", i) +      # [0:2]  packet id (LE)
+                RESERVED +                  # [2:12] 10 reserved zeros
+                payload                     # [12:236] 224-byte payload
+            )
+            crc32  = zlib.crc32(body) & 0xFFFFFFFF
+            packet = body + struct.pack("<I", crc32)
+
+            try:
+                await ctx.client.write_gatt_char(
+                    mod.DATA_UUID, packet, response=False)
+            except (BleakError, OSError, ValueError) as e:
+                print(f"❌ write failed on packet {i}: {e}")
+                return
+
+            sent_ids.add(i)
+            sent += 1
+
+            if PACE_S:
+                await asyncio.sleep(PACE_S)
+
+        t_sent = time.perf_counter()
+
+        # ── Drain: give the device time to finish ACKing the last packets ──
+        print(f"… streamed {sent} packets, draining ACKs for {DRAIN_S:.1f}s …")
+        await asyncio.sleep(DRAIN_S)
+
+        # ── Analysis ──
+        total_s     = t_sent - t_start
+        total_bytes = sent * (PAYLOAD_LEN + 16)          # +16 = 2 id +10 rsvd +4 crc
+        thru_kbs    = (total_bytes / total_s) / 1024.0 if total_s else 0.0
+
+        missing   = sorted(sent_ids - acked)             # sent but never ACK'd
+        unexpected = sorted(acked - sent_ids)            # ACK'd but never sent (!)
+        dup_count = len(ack_order) - len(acked)          # repeated ACKs
+
+        print(
+            "\n✅ FOTA one-way streaming complete:\n"
+            f"     Sent        : {sent}/{N_PACKETS}\n"
+            f"     ACK'd unique: {len(acked)}\n"
+            f"     Duplicates  : {dup_count}\n"
+            f"     Bad-length  : {bad_len}\n"
+            f"     Bytes total : {total_bytes} B\n"
+            f"     Send time   : {total_s:.3f} s\n"
+            f"     Throughput  : {thru_kbs:.2f} KB/s\n"
+            f"     Est. 500 KB : "
+            f"{500 * 1024 / (total_bytes / total_s):.1f} s" if total_s else "n/a"
+        )
+
+        # ── Missing report ──
+        if not missing:
+            print(f"     Missing     : 0  🎉 all {sent} packets ACK'd")
+        else:
+            print(f"     Missing     : {len(missing)} packet id(s) never ACK'd:")
+            # print compactly as ranges (e.g. 12, 40-43, 2195)
+            print("       " + _compact_ranges(missing))
+
+        if unexpected:
+            print(f"     ⚠️ Unexpected ACKs (id not sent): {unexpected[:20]}"
+                  f"{' …' if len(unexpected) > 20 else ''}")
+
+    finally:
+        try:
+            if ctx.client and ctx.client.is_connected:
+                await ctx.client.stop_notify(fb_uuid)
+        except (BleakError, OSError) as e:
+            print(f"stop_notify warning ({fb_uuid}): {e}")
+
+
+def _compact_ranges(ids: list[int]) -> str:
+    """Collapse a sorted list of ints into 'a, b-c, d' style ranges."""
+    if not ids:
+        return ""
+    parts = []
+    start = prev = ids[0]
+    for x in ids[1:]:
+        if x == prev + 1:
+            prev = x
+            continue
+        parts.append(f"{start}" if start == prev else f"{start}-{prev}")
+        start = prev = x
+    parts.append(f"{start}" if start == prev else f"{start}-{prev}")
+    return ", ".join(parts)
+
 # subscribe  (multi-channel)
 # ═════════════════════════════════════════════
 async def cmd_subscribe(value: str):
