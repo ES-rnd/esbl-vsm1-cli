@@ -6,7 +6,8 @@ from typing import Any
 import time
 from datetime import datetime, timezone
 from pathlib import Path
-import struct, zlib
+import zlib
+import math
 
 from bleak.exc import BleakError
 
@@ -327,151 +328,6 @@ async def cmd_configure(value: str, kv: dict):
     except (KeyError, NameError, AttributeError, TypeError) as e:
         print(f"⚠️  Title refresh skipped (non-fatal): {type(e).__name__}: {e}")     # noqa
 
-async def cmd_update(value: str, kv: dict):
-    """
-        One-way FOTA benchmark: stream N packets on DATA_UUID back-to-back
-        WITHOUT waiting per packet. A notification callback records every
-        ACK'd packet id. After streaming (plus a drain window) it reports
-        total time/throughput and prints any packet ids that never ACK'd.
-    """
-
-    if not require_connected():
-        return
-
-    if value not in SENSOR_REGISTRY:
-        print(f"⚠️  Unknown -value '{value}'. Available: {list(SENSOR_REGISTRY)}")  # noqa
-        return
-
-    mod = SENSOR_REGISTRY[value]
-
-    # ── Packet geometry ──────────────────────────────────────────
-    RESERVED    = b"\x00" * 10     # 10 reserved zero bytes
-    PAYLOAD_LEN = 14 * 16          # 224 bytes
-    N_PACKETS   = 1700
-
-    # ── Streaming / feedback params ──────────────────────────────
-    FB_LEN        = 8              # expected feedback length (bytes)
-    PACE_S        = 0.0075         # inter-packet pacing (set 0.0 for max rate)
-    DRAIN_S       = 2.0            # wait after last send for stragglers
-    loop          = asyncio.get_running_loop()
-
-    # ── ACK bookkeeping (populated by the notification callback) ──
-    acked: set[int]      = set()   # unique ids that ACK'd
-    ack_order: list[int] = []      # every ACK, in arrival order (to spot dupes)
-    bad_len              = 0       # ACKs with unexpected length
-
-    def _fb_cb(_handle, data) -> None:
-        nonlocal bad_len
-        if len(data) < 3:
-            bad_len += 1
-            return
-        if len(data) != FB_LEN:
-            bad_len += 1
-            # still parse the id — length mismatch is informational
-        ack_id = data[1] + (data[2] << 8)
-        ack_order.append(ack_id)
-        acked.add(ack_id)
-
-    # ── Resolve + validate feedback characteristic BEFORE subscribing ──
-    fb_uuid = getattr(mod, "FB_UUID", None)
-    if fb_uuid is None:
-        print(f"❌ '{value}' module has no FB_UUID defined.")
-        return
-
-    fb_char = ctx.client.services.get_characteristic(fb_uuid)
-    if fb_char is None:
-        print(f"❌ Feedback char {fb_uuid} not found in the GATT table.")
-        return
-
-    props = fb_char.properties
-    if "notify" not in props and "indicate" not in props:
-        print(f"❌ {fb_uuid} is not notifiable (props={props}).")
-        return
-
-    # 1) Subscribe to feedback FIRST so no early ACK is missed
-    try:
-        await ctx.client.start_notify(fb_uuid, _fb_cb)
-    except (BleakError, OSError) as e:
-        print(f"❌ Could not subscribe to feedback {fb_uuid}: {e}")
-        return
-
-    sent      = 0
-    sent_ids  = set()
-    t_start   = time.perf_counter()
-
-    try:
-        # ── Stream all packets, no per-packet wait ──
-        for i in range(N_PACKETS):
-            payload = bytes((1 + j) & 0xFF for j in range(PAYLOAD_LEN))
-            body = (
-                struct.pack("<H", i) +      # [0:2]  packet id (LE)
-                RESERVED +                  # [2:12] 10 reserved zeros
-                payload                     # [12:236] 224-byte payload
-            )
-            crc32  = zlib.crc32(body) & 0xFFFFFFFF
-            packet = body + struct.pack("<I", crc32)
-
-            try:
-                await ctx.client.write_gatt_char(
-                    mod.DATA_UUID, packet, response=False)
-            except (BleakError, OSError, ValueError) as e:
-                print(f"❌ write failed on packet {i}: {e}")
-                return
-
-            sent_ids.add(i)
-            sent += 1
-
-            if PACE_S:
-                await asyncio.sleep(PACE_S)
-
-        t_sent = time.perf_counter()
-
-        # ── Drain: give the device time to finish ACKing the last packets ──
-        print(f"… streamed {sent} packets, draining ACKs for {DRAIN_S:.1f}s …")
-        await asyncio.sleep(DRAIN_S)
-
-        # ── Analysis ──
-        total_s     = t_sent - t_start
-        total_bytes = sent * (PAYLOAD_LEN + 16)          # +16 = 2 id +10 rsvd +4 crc
-        thru_kbs    = (total_bytes / total_s) / 1024.0 if total_s else 0.0
-
-        missing   = sorted(sent_ids - acked)             # sent but never ACK'd
-        unexpected = sorted(acked - sent_ids)            # ACK'd but never sent (!)
-        dup_count = len(ack_order) - len(acked)          # repeated ACKs
-
-        print(
-            "\n✅ FOTA one-way streaming complete:\n"
-            f"     Sent        : {sent}/{N_PACKETS}\n"
-            f"     ACK'd unique: {len(acked)}\n"
-            f"     Duplicates  : {dup_count}\n"
-            f"     Bad-length  : {bad_len}\n"
-            f"     Bytes total : {total_bytes} B\n"
-            f"     Send time   : {total_s:.3f} s\n"
-            f"     Throughput  : {thru_kbs:.2f} KB/s\n"
-            f"     Est. 500 KB : "
-            f"{500 * 1024 / (total_bytes / total_s):.1f} s" if total_s else "n/a"
-        )
-
-        # ── Missing report ──
-        if not missing:
-            print(f"     Missing     : 0  🎉 all {sent} packets ACK'd")
-        else:
-            print(f"     Missing     : {len(missing)} packet id(s) never ACK'd:")
-            # print compactly as ranges (e.g. 12, 40-43, 2195)
-            print("       " + _compact_ranges(missing))
-
-        if unexpected:
-            print(f"     ⚠️ Unexpected ACKs (id not sent): {unexpected[:20]}"
-                  f"{' …' if len(unexpected) > 20 else ''}")
-
-    finally:
-        try:
-            if ctx.client and ctx.client.is_connected:
-                await ctx.client.stop_notify(fb_uuid)
-        except (BleakError, OSError) as e:
-            print(f"stop_notify warning ({fb_uuid}): {e}")
-
-
 def _compact_ranges(ids: list[int]) -> str:
     """Collapse a sorted list of ints into 'a, b-c, d' style ranges."""
     if not ids:
@@ -487,8 +343,439 @@ def _compact_ranges(ids: list[int]) -> str:
     parts.append(f"{start}" if start == prev else f"{start}-{prev}")
     return ", ".join(parts)
 
-# subscribe  (multi-channel)
-# ═════════════════════════════════════════════
+
+async def cmd_update(value: str, kv: dict):
+    """
+    FOTA file streamer.
+
+    Reads a .bin file from -file, splits it first into 8192-byte flash pages,
+    then splits each page into fixed 224-byte BLE payload packets.
+
+    Packet format, total 240 bytes:
+
+        [0:2]     packet_id, uint16 LE, global packet id
+        [2:4]     page_id, uint16 LE
+        [4:228]   payload, 224 bytes
+        [228:236] reserved, 8 bytes
+        [236:240] crc32 over bytes [0:236]
+
+    The original firmware size and original image CRC32 are sent in the
+    start/config packet. Page padding is only for transport/flash-page alignment.
+    """
+
+    if not require_connected():
+        return
+
+    if value not in SENSOR_REGISTRY:
+        print(f"⚠️  Unknown -value '{value}'. Available: {list(SENSOR_REGISTRY)}")
+        return
+
+    mod = SENSOR_REGISTRY[value]
+
+    # ── Resolve file argument ────────────────────────────────────
+    file_arg = kv.get("file")
+
+    if not file_arg:
+        print("❌ Missing -file argument.")
+        print("Usage: update -module fota -file <firmware.bin>")
+        return
+
+    file_path = Path(file_arg)
+
+    if not file_path.is_absolute():
+        cwd_path = Path.cwd() / file_path
+        parent_path = Path.cwd().parent / file_path
+
+        if cwd_path.exists():
+            file_path = cwd_path
+        elif parent_path.exists():
+            file_path = parent_path
+        else:
+            print(f"❌ File not found: {file_arg}")
+            print(f"   Tried: {cwd_path}")
+            print(f"   Tried: {parent_path}")
+            return
+
+    if not file_path.exists() or not file_path.is_file():
+        print(f"❌ Invalid file: {file_path}")
+        return
+
+    if file_path.suffix.lower() != ".bin":
+        print(f"❌ Expected a .bin file, got: {file_path.name}")
+        return
+
+    try:
+        fw = file_path.read_bytes()
+    except OSError as e:
+        print(f"❌ Could not read file '{file_path}': {e}")
+        return
+
+    if not fw:
+        print(f"❌ File is empty: {file_path}")
+        return
+
+    # ── FOTA geometry ────────────────────────────────────────────
+    FLASH_PAGE_SIZE = 8192
+
+    PAYLOAD_LEN = 14 * 16          # 224 bytes
+    RESERVED_LEN = 8               # [228:236]
+    PACKET_TOTAL_LEN = 240
+
+    PACKET_ID_OFF = 0
+    PAGE_ID_OFF = 2
+    PAYLOAD_OFF = 4
+    RESERVED_OFF = PAYLOAD_OFF + PAYLOAD_LEN      # 228
+    CRC_OFF = PACKET_TOTAL_LEN - 4                # 236
+
+    PACKETS_PER_PAGE = math.ceil(FLASH_PAGE_SIZE / PAYLOAD_LEN)
+
+    N_PAGES = math.ceil(len(fw) / FLASH_PAGE_SIZE)
+    N_PACKETS = N_PAGES * PACKETS_PER_PAGE
+
+    padded_fw_size = N_PAGES * FLASH_PAGE_SIZE
+    image_padding = padded_fw_size - len(fw)
+
+    if N_PAGES > 0x10000:
+        print(
+            f"❌ Firmware too large for uint16 page IDs: "
+            f"{N_PAGES} pages required."
+        )
+        return
+
+    if N_PACKETS > 0x10000:
+        print(
+            f"❌ Firmware too large for uint16 global packet IDs: "
+            f"{N_PACKETS} packets required."
+        )
+        return
+
+    # ── Streaming / feedback params ──────────────────────────────
+    FB_LEN = 8
+    PACE_S = 0.0075
+    DRAIN_S = 2.0
+
+    # ── FOTA start header values ─────────────────────────────────
+    fw_uuid = 0x12345678
+
+    version_major = 1
+    version_minor = 2
+    version_patch = 3
+
+    total_size = len(fw)
+    image_crc32 = zlib.crc32(fw) & 0xFFFFFFFF
+
+    reserved = b"\x00" * 3
+    flags = 0x00
+    protocol_ver = 1
+
+    # ── ACK bookkeeping ──────────────────────────────────────────
+    acked: set[int] = set()
+    ack_order: list[int] = []
+    bad_len = 0
+
+    response_data = None
+    response_event = asyncio.Event()
+
+    def _compact_ranges(values: list[int]) -> str:
+        if not values:
+            return ""
+
+        ranges = []
+        start = prev = values[0]
+
+        for v in values[1:]:
+            if v == prev + 1:
+                prev = v
+                continue
+
+            ranges.append(f"{start}" if start == prev else f"{start}-{prev}")
+            start = prev = v
+
+        ranges.append(f"{start}" if start == prev else f"{start}-{prev}")
+
+        return ", ".join(ranges)
+
+    def _fb_cb(_handle, data) -> None:
+        nonlocal response_data
+        nonlocal bad_len
+
+        data = bytes(data)
+
+        if len(data) < 5:
+            bad_len += 1
+            return
+
+        try:
+            rx_uuid = struct.unpack("<I", data[0:4])[0]
+        except struct.error:
+            bad_len += 1
+            return
+
+        if rx_uuid != fw_uuid:
+            print("Wrong Response UUID. Skipping...")
+            return
+
+        resp_type = data[4]
+
+        # Start/config response
+        if resp_type == 0:
+            if len(data) < 6:
+                bad_len += 1
+                return
+
+            response_data = data[5]
+            response_event.set()
+            return
+
+        # Packet ACK response
+        if resp_type == 1:
+            if len(data) != FB_LEN:
+                bad_len += 1
+                return
+
+            ack_id = data[6] | (data[7] << 8)
+
+            ack_order.append(ack_id)
+            acked.add(ack_id)
+            return
+
+        bad_len += 1
+
+    # ── Resolve + validate feedback characteristic ───────────────
+    fb_uuid = getattr(mod, "FB_UUID", None)
+
+    if fb_uuid is None:
+        print(f"❌ '{value}' module has no FB_UUID defined.")
+        return
+
+    fb_char = ctx.client.services.get_characteristic(fb_uuid)
+
+    if fb_char is None:
+        print(f"❌ Feedback char {fb_uuid} not found in the GATT table.")
+        return
+
+    props = fb_char.properties
+
+    if "notify" not in props and "indicate" not in props:
+        print(f"❌ {fb_uuid} is not notifiable (props={props}).")
+        return
+
+    print(
+        "\n📦 FOTA file selected:\n"
+        f"     File              : {file_path.name}\n"
+        f"     Path              : {file_path}\n"
+        f"     Version           : @v{version_major}.{version_minor}.{version_patch}\n"
+        f"     Original size     : {len(fw)} B\n"
+        f"     Image CRC32       : 0x{image_crc32:08X}\n"
+        f"     Flash page size   : {FLASH_PAGE_SIZE} B\n"
+        f"     Pages             : {N_PAGES}\n"
+        f"     Page padding      : {image_padding} B\n"
+        f"     Payload           : {PAYLOAD_LEN} B/packet\n"
+        f"     Packets/page      : {PACKETS_PER_PAGE}\n"
+        f"     Total packets     : {N_PACKETS}\n"
+        f"     Packet size       : {PACKET_TOTAL_LEN} B\n"
+    )
+
+    # 1) Subscribe to feedback FIRST so no early ACK is missed
+    try:
+        await ctx.client.start_notify(fb_uuid, _fb_cb)
+    except (BleakError, OSError) as e:
+        print(f"❌ Could not subscribe to feedback {fb_uuid}: {e}")
+        return
+
+    try:
+        # ── Build and send start/config packet ────────────────────
+        start_packet = (
+            struct.pack(
+                "<IBBBII",
+                fw_uuid,
+                version_major,
+                version_minor,
+                version_patch,
+                total_size,
+                image_crc32,
+            )
+            + reserved
+            + bytes([flags])
+            + bytes([protocol_ver])
+        )
+
+        if len(start_packet) != 20:
+            print(f"❌ Internal start packet size error: {len(start_packet)} != 20")
+            return
+
+        response_event.clear()
+        response_data = None
+
+        try:
+            await ctx.client.write_gatt_char(
+                mod.CONFIG_UUID,
+                start_packet,
+                response=False,
+            )
+        except (BleakError, OSError, ValueError) as e:
+            print(f"❌ start/config write failed: {e}")
+            return
+
+        try:
+            await asyncio.wait_for(response_event.wait(), timeout=0.5)
+
+            if response_data != 1:
+                print("FOTA Rejected. Exiting...")
+                return
+
+        except asyncio.TimeoutError:
+            print("Fatal: No response in 500 ms. Exiting FOTA...")
+            return
+
+        print("FOTA Accepted. Proceeding...")
+
+        await asyncio.sleep(1)
+
+        sent = 0
+        sent_ids: set[int] = set()
+
+        t_start = time.perf_counter()
+
+        # ── Stream page-by-page, packet-by-packet ─────────────────
+        global_packet_id = 0
+
+        # for page_id in range(N_PAGES):
+        for page_id in range(1):
+            page_start = page_id * FLASH_PAGE_SIZE
+            page_end = page_start + FLASH_PAGE_SIZE
+
+            page = fw[page_start:page_end]
+
+            # Pad final firmware page to full flash page size.
+            if len(page) < FLASH_PAGE_SIZE:
+                page = page.ljust(FLASH_PAGE_SIZE, b"\x00")
+
+            if len(page) != FLASH_PAGE_SIZE:
+                print(
+                    f"❌ Internal page size error: "
+                    f"page={page_id}, len={len(page)}"
+                )
+                return
+
+            for pkt_in_page in range(PACKETS_PER_PAGE):
+                payload_start = pkt_in_page * PAYLOAD_LEN
+                payload_end = payload_start + PAYLOAD_LEN
+
+                payload = page[payload_start:payload_end]
+
+                # Last packet of every 8192-byte page is partially padded,
+                # because 8192 is not divisible by 224.
+                if len(payload) < PAYLOAD_LEN:
+                    payload = payload.ljust(PAYLOAD_LEN, b"\x00")
+
+                body = (
+                    struct.pack("<H", global_packet_id) +  # [0:2]
+                    struct.pack("<H", page_id) +           # [2:4]
+                    (b"\x00" * RESERVED_LEN) +             # [4:12]
+                    payload                                # [12:236]
+                )
+
+                if len(body) != CRC_OFF:
+                    print(
+                        f"❌ Internal body size error: "
+                        f"{len(body)} != {CRC_OFF}"
+                    )
+                    return
+
+                crc32 = zlib.crc32(body) & 0xFFFFFFFF
+                packet = body + struct.pack("<I", crc32)
+
+                if len(packet) != PACKET_TOTAL_LEN:
+                    print(
+                        f"❌ Internal packet size error: "
+                        f"{len(packet)} != {PACKET_TOTAL_LEN}"
+                    )
+                    return
+
+                try:
+                    await ctx.client.write_gatt_char(
+                        mod.DATA_UUID,
+                        packet,
+                        response=False,
+                    )
+                except (BleakError, OSError, ValueError) as e:
+                    print(
+                        f"❌ write failed on packet {global_packet_id} "
+                        f"(page={page_id}, pkt_in_page={pkt_in_page}): {e}"
+                    )
+                    return
+
+                sent_ids.add(global_packet_id)
+                sent += 1
+                global_packet_id += 1
+
+                if PACE_S:
+                    await asyncio.sleep(PACE_S)
+
+        t_sent = time.perf_counter()
+
+        # ── Drain: give the device time to finish ACKing ──────────
+        print(f"… streamed {sent} packets, draining ACKs for {DRAIN_S:.1f}s …")
+        await asyncio.sleep(DRAIN_S)
+
+        # ── Analysis ──────────────────────────────────────────────
+        total_s = t_sent - t_start
+
+        air_bytes = sent * PACKET_TOTAL_LEN
+        firmware_bytes = len(fw)
+
+        thru_kbs_air = (air_bytes / total_s) / 1024.0 if total_s else 0.0
+        thru_kbs_fw = (firmware_bytes / total_s) / 1024.0 if total_s else 0.0
+
+        missing = sorted(sent_ids - acked)
+        unexpected = sorted(acked - sent_ids)
+        dup_count = len(ack_order) - len(acked)
+
+        if total_s:
+            est_500kb = 500 * 1024 / (firmware_bytes / total_s)
+            est_500kb_str = f"{est_500kb:.1f} s"
+        else:
+            est_500kb_str = "n/a"
+
+        print(
+            "\n✅ FOTA file streaming complete:\n"
+            f"     File              : {file_path.name}\n"
+            f"     FW size           : {firmware_bytes} B\n"
+            f"     Image CRC32       : 0x{image_crc32:08X}\n"
+            f"     Flash pages       : {N_PAGES}\n"
+            f"     Page padding      : {image_padding} B\n"
+            f"     Packets/page      : {PACKETS_PER_PAGE}\n"
+            f"     Sent              : {sent}/{N_PACKETS}\n"
+            f"     ACK'd unique      : {len(acked)}\n"
+            f"     Duplicates        : {dup_count}\n"
+            f"     Bad-length        : {bad_len}\n"
+            f"     Air bytes         : {air_bytes} B\n"
+            f"     Send time         : {total_s:.3f} s\n"
+            f"     Throughput        : {thru_kbs_fw:.2f} KB/s firmware\n"
+            f"                         {thru_kbs_air:.2f} KB/s over BLE payload\n"
+            f"     Est. 500 KB       : {est_500kb_str}"
+        )
+
+        if not missing:
+            print(f"     Missing           : 0  🎉 all {sent} packets ACK'd")
+        else:
+            print(f"     Missing           : {len(missing)} packet id(s) never ACK'd:")
+            print("       " + _compact_ranges(missing))
+
+        if unexpected:
+            print(
+                f"     ⚠️ Unexpected ACKs (id not sent): {unexpected[:20]}"
+                f"{' …' if len(unexpected) > 20 else ''}"
+            )
+
+    finally:
+        try:
+            if ctx.client and ctx.client.is_connected:
+                await ctx.client.stop_notify(fb_uuid)
+        except (BleakError, OSError) as e:
+            print(f"stop_notify warning ({fb_uuid}): {e}")
+
 async def cmd_subscribe(value: str):
     """
         Subscribe to ALL data channels of a sensor; open one plot per channel.

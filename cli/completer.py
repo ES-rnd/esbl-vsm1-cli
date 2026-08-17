@@ -7,7 +7,7 @@ from prompt_toolkit.formatted_text import HTML
 
 from ..state import ctx
 from ..sensors.registry import SENSOR_REGISTRY
-
+from pathlib import Path
 
 COMMANDS = [
     "scan", "stop_scan",
@@ -76,6 +76,21 @@ class EssCompleter(Completer):
                 i = tokens.index("-module")
                 if i + 1 < len(tokens):
                     sel = tokens[i + 1]
+
+            # update -file <bin>
+            if cmd == "update" and prev == "-file":
+                parent = Path.cwd()
+
+                for f in sorted(parent.glob("*.bin")):
+                    name = f.name
+
+                    if name.startswith(partial):
+                        yield Completion(
+                            name,
+                            start_position=-len(partial),
+                        )
+
+                return
 
             # 3a) right after `-module` → suggest sensor keys
             if prev == "-module":
