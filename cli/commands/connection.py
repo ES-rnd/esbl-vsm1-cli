@@ -11,6 +11,7 @@ from .sensors import cmd_unsubscribe
 from .base import require_connected
 
 
+
 async def cmd_connect(mac: str):
     """
         Connect to a known device by MAC address.
@@ -34,8 +35,26 @@ async def cmd_connect(mac: str):
 
     await asyncio.sleep(0.6)   # let scanner_loop tear down
 
+    def _on_unexpected_disconnect(client: BleakClient) -> None:
+        """Fires on ANY drop Bleak detects: timeout, fault, or device reset."""
+        # ignore if we already tore down cleanly
+
+        print("Funnnk")
+
+        if ctx.state != State.CONNECTED:
+            return
+
+        print(f"\n⚠️  Lost connection to {ctx.connected_addr} (timeout/reset).")
+        ctx.client = None
+        ctx.connected_addr = None
+        ctx.subscriptions.clear()      # notifications are dead after a drop
+        ctx.state = State.IDLE
+        print("Renewed state → IDLE. Reconnect with `connect <mac>`.")
+
     try:
-        ctx.client = BleakClient(mac)
+        ctx.client = BleakClient(
+            mac, 
+            disconnected_callback=_on_unexpected_disconnect)
 
         await ctx.client.connect()
 

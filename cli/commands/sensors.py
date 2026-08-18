@@ -640,8 +640,7 @@ async def cmd_update(value: str, kv: dict):
         # ── Stream page-by-page, packet-by-packet ─────────────────
         global_packet_id = 0
 
-        # for page_id in range(N_PAGES):
-        for page_id in range(1):
+        for page_id in range(N_PAGES):
             page_start = page_id * FLASH_PAGE_SIZE
             page_end = page_start + FLASH_PAGE_SIZE
 
@@ -710,8 +709,23 @@ async def cmd_update(value: str, kv: dict):
                 sent += 1
                 global_packet_id += 1
 
+                global_packet_id = global_packet_id % 37
+
+                progress = (sent / N_PACKETS) * 100.0
+                print(
+                    f"\r🚀 Sending FOTA: {sent}/{N_PACKETS} packets "
+                    f"({progress:5.1f}%)",
+                    end="",
+                    flush=True,
+                )
+
                 if PACE_S:
                     await asyncio.sleep(PACE_S)
+
+                if pkt_in_page == 36:
+                    await asyncio.sleep(0.05)
+
+        print()
 
         t_sent = time.perf_counter()
 
