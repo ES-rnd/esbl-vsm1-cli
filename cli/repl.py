@@ -12,7 +12,7 @@ from .prompt import make_prompt
 from .commands.scan import cmd_scan, cmd_stop, cmd_list_devices, cmd_clear
 from .commands.connection import cmd_connect, cmd_disconnect
 from .commands.gatt import cmd_list_services, cmd_list_characteristics
-from .commands.sensors import cmd_subscribe, cmd_unsubscribe, cmd_configure, cmd_update, cmd_record, cmd_stop_record    # noqa
+from .commands.sensors import cmd_subscribe, cmd_unsubscribe, cmd_calibrate, cmd_configure, cmd_update, cmd_record, cmd_stop_record    # noqa
 from .commands.help import cmd_help
 
 
@@ -75,6 +75,8 @@ async def repl(stop: asyncio.Event):
                 await cmd_disconnect()
             elif cmd == "clear":
                 await cmd_clear()
+            elif cmd == "calibrate":
+                await cmd_calibrate()
             elif cmd == "help":
                 cmd_help()
             elif cmd == "exit":

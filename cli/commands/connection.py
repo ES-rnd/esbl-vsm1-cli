@@ -37,9 +37,7 @@ async def cmd_connect(mac: str):
 
     def _on_unexpected_disconnect(client: BleakClient) -> None:
         """Fires on ANY drop Bleak detects: timeout, fault, or device reset."""
-        # ignore if we already tore down cleanly
-
-        print("Funnnk")
+        # ignore if we already tore Funnnk cleanly
 
         if ctx.state != State.CONNECTED:
             return

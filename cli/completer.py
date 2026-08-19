@@ -16,6 +16,7 @@ COMMANDS = [
     "subscribe", "unsubscribe",
     "record", "stop_record",
     "configure",
+    "calibrate",
     "update",
     "clear", "help", "exit",
 ]
@@ -93,12 +94,14 @@ class EssCompleter(Completer):
                 return
 
             # 3a) right after `-module` → suggest sensor keys
-            if prev == "-module":
+            if prev == "-module" and cmd != "update":
                 for key in SENSOR_REGISTRY.keys():
-                    if key.startswith(partial):
+                    if key.startswith(partial) and key != "fota":
                         yield Completion(key, start_position=-len(partial))
 
                 return
+            elif prev == "-module" and cmd == "update":
+                yield Completion("fota", start_position=-len(partial))
 
             # 3b) sensor is selected → use its PARAMS schema
             if sel and sel in SENSOR_REGISTRY:
@@ -151,7 +154,7 @@ class EssCompleter(Completer):
                 partial = "" if text.endswith(" ") else tokens[-1]
 
                 for key in SENSOR_REGISTRY:
-                    if key.startswith(partial):
+                    if key.startswith(partial) and key != "fota":
                         yield Completion(key, start_position=-len(partial))
 
                 return

@@ -209,6 +209,7 @@ def _make_single_cb(decode_fn, plot_ref, label, series_count, value) -> Any:
     return cb
 
 
+
 # ═════════════════════════════════════════════
 # configure  (schema-driven, works for any sensor)
 # ═════════════════════════════════════════════
@@ -342,7 +343,6 @@ def _compact_ranges(ids: list[int]) -> str:
         start = prev = x
     parts.append(f"{start}" if start == prev else f"{start}-{prev}")
     return ", ".join(parts)
-
 
 async def cmd_update(value: str, kv: dict):
     """
@@ -979,6 +979,30 @@ async def cmd_unsubscribe(value: str):
 
     print(f"👋 Unsubscribed from '{value}'.")
 
+
+async def cmd_calibrate():
+    """
+        Calibrate sensor
+    """
+
+    if not require_connected():
+        return
+
+    CALIBRATION_UUID = "0000fe41-8e22-4541-9d4c-21edae82ed19"
+
+    packet = bytes(5)
+
+    try:
+        await ctx.client.write_gatt_char(
+            CALIBRATION_UUID,
+            packet,
+            response=False,
+        )
+    except (BleakError, OSError, ValueError) as e:
+        print(f"❌ start/config write failed: {e}")
+        return
+    
+    print("👋 Sensor Calibration Requested.")
 
 # ═════════════════════════════════════════════
 # Watchdog: tear down subscription when ALL plots are closed
