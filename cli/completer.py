@@ -64,7 +64,56 @@ class EssCompleter(Completer):
                         )
             return
 
-        # 3) configure → -module <name> / -<param> <value>  (schema-driven per sensor)  # noqa            
+                # calibrate → -module <imu|fft>, and imu has extra int options (10..100)
+        if cmd == "calibrate":
+            next_is_partial = not text.endswith(" ")
+            partial = tokens[-1] if next_is_partial else ""
+            prev = tokens[-2 if next_is_partial else -1] if len(tokens) > 1 else ""   # noqa
+
+            ALLOWED_MODULES = ("imu", "fft")
+            IMU_OPTIONS = ("z_offset", "mag_xy", "jitter")
+
+            # Find selected module (-module <X>) if any
+            sel = None
+            if "-module" in tokens:
+                i = tokens.index("-module")
+                if i + 1 < len(tokens):
+                    sel = tokens[i + 1]
+
+            # right after `-module` → suggest allowed modules only
+            if prev == "-module":
+                for key in ALLOWED_MODULES:
+                    if key.startswith(partial):
+                        yield Completion(key, start_position=-len(partial))
+                return
+
+            # imu selected
+            if sel == "imu":
+                # right after a known imu flag → suggest int values 10..100
+                if prev.startswith("-") and prev[1:] in IMU_OPTIONS:
+                    for n in range(10, 101):
+                        s = str(n)
+                        if s.startswith(partial):
+                            yield Completion(s, start_position=-len(partial))
+                    return
+
+                # otherwise suggest remaining unused flag names
+                used = {t[1:] for t in tokens if t.startswith("-") and t != "-module"}  # noqa
+                for opt in IMU_OPTIONS:
+                    if opt in used:
+                        continue
+                    f = f"-{opt}"
+                    if f.startswith(partial):
+                        yield Completion(f, start_position=-len(partial))
+                return
+
+            # no -module yet → suggest -module
+            if "-module" not in tokens and "-module".startswith(partial):
+                yield Completion("-module", start_position=-len(partial))
+
+            return
+
+        # 3) configure → -module <name> / -<param> <value>  (schema-driven per sensor)  # noqa      
 
         if cmd == "configure" or cmd == "update":
             next_is_partial = not text.endswith(" ")

@@ -27,6 +27,8 @@ def cmd_help() -> Any:
                                             (subscribed) Start CSV recording (long format)
         stop_record -module <fft>           (subscribed) Stop CSV recording + close file
 
+        update -module <fota> -file <*.bin> (connected) Performs Firmware Update Over the Air 
+
         configure -module temp -freq <1..10>
         configure -module imu  -low_scale <2g|4g|8g|16g> 
                                -high_scale <32g|64g|128g|256g>

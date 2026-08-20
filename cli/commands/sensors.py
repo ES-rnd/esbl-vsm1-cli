@@ -980,18 +980,40 @@ async def cmd_unsubscribe(value: str):
     print(f"👋 Unsubscribed from '{value}'.")
 
 
-async def cmd_calibrate():
+async def cmd_calibrate(value: str, kv: dict):
     """
-        Calibrate sensor
+        Calibrate a sensor module.
+
+        Receives the selected -module (`value`) and any extra options
+        (`kv`, e.g. z_offset / mag_xy / jitter for imu), prints what was
+        passed in, then issues the calibration write to the device.
     """
 
     if not require_connected():
         return
 
+    # ── Echo back the arguments we received ──────────────────────
+    print("🛠  Calibration requested:")
+    print(f"     Module  : {value}")
+
+    # ── Issue the calibration call ───────────────────────────────
     CALIBRATION_UUID = "0000fe41-8e22-4541-9d4c-21edae82ed19"
 
-    packet = bytes(5)
+    packet = [0, 0, 0, 0, 0]
 
+    if kv:
+        for k, v in kv.items():
+            if k == "z_offset":
+                packet[1] = int(v)
+            elif k == "mag_xy":
+                packet[2] = int(v)
+            elif k == "jitter":
+                packet[3] = int(v)
+    
+    packet = bytes(packet)
+
+    print(packet)
+    
     try:
         await ctx.client.write_gatt_char(
             CALIBRATION_UUID,
@@ -999,10 +1021,11 @@ async def cmd_calibrate():
             response=False,
         )
     except (BleakError, OSError, ValueError) as e:
-        print(f"❌ start/config write failed: {e}")
+        print(f"❌ calibration write failed: {e}")
         return
-    
+
     print("👋 Sensor Calibration Requested.")
+
 
 # ═════════════════════════════════════════════
 # Watchdog: tear down subscription when ALL plots are closed

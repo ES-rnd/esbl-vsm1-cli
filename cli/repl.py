@@ -75,8 +75,6 @@ async def repl(stop: asyncio.Event):
                 await cmd_disconnect()
             elif cmd == "clear":
                 await cmd_clear()
-            elif cmd == "calibrate":
-                await cmd_calibrate()
             elif cmd == "help":
                 cmd_help()
             elif cmd == "exit":
@@ -128,7 +126,7 @@ async def repl(stop: asyncio.Event):
                 await cmd_list_characteristics(svc)
 
             # configure -module <sensor> [-<param> <value> ...]   schema-driven
-            elif cmd == "configure" or cmd == "update":
+            elif cmd == "configure" or cmd == "update" or cmd == "calibrate":
                 module = _extract_flag(args, "-module")
                 if module is None:
                     print("Usage: configure -module <sensor> [-<param> <value> ...]")   # noqa
@@ -162,6 +160,8 @@ async def repl(stop: asyncio.Event):
                         await cmd_configure(module, kv)
                     elif cmd == "update":
                         await cmd_update(module, kv)
+                    elif cmd == "calibrate":
+                        await cmd_calibrate(module, kv)
 
             else:
                 print(f"Unknown command: {cmd}  (try `help`)")
