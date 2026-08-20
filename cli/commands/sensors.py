@@ -984,23 +984,22 @@ async def cmd_calibrate(value: str, kv: dict):
     """
         Calibrate a sensor module.
 
-        Receives the selected -module (`value`) and any extra options
-        (`kv`, e.g. z_offset / mag_xy / jitter for imu), prints what was
-        passed in, then issues the calibration write to the device.
+        Subscribes to the calibration characteristic, issues the start
+        write, then decodes/prints every feedback frame the firmware sends
+        and reports the final result (theta on success, or the reason on
+        failure).
     """
 
     if not require_connected():
         return
 
+    CALIBRATION_UUID = "0000fe41-8e22-4541-9d4c-21edae82ed19"
+
     # ── Echo back the arguments we received ──────────────────────
     print("🛠  Calibration requested:")
     print(f"     Module  : {value}")
 
-    # ── Issue the calibration call ───────────────────────────────
-    CALIBRATION_UUID = "0000fe41-8e22-4541-9d4c-21edae82ed19"
-
     packet = [0, 0, 0, 0, 0]
-
     if kv:
         for k, v in kv.items():
             if k == "z_offset":
@@ -1009,23 +1008,114 @@ async def cmd_calibrate(value: str, kv: dict):
                 packet[2] = int(v)
             elif k == "jitter":
                 packet[3] = int(v)
-    
+            else:
+                print(f"     ⚠️ ignoring unknown option -{k}")
+
+    for k in ("z_offset", "mag_xy", "jitter"):
+        if k in kv:
+            print(f"     -{k:<9}: {int(kv[k])} mg")
+
     packet = bytes(packet)
 
-    print(packet)
-    
+    # ── Result bookkeeping ───────────────────────────────────────
+    done = asyncio.Event()
+    result = {"ok": False, "theta_deg": None, "reason": None}
+
+    def _u16(lo, hi):
+        return lo | (hi << 8)
+
+    def _s16(lo, hi):
+        u = lo | (hi << 8)
+        return u - 0x10000 if u & 0x8000 else u
+
+    def _decode(data: bytes) -> None:
+        if len(data) < 5:
+            print(f"[calibrate] short frame ({len(data)} B): {data.hex()}")
+            return
+
+        state = data[0]
+        sub = data[1]
+
+        # ── 0x00: start / accepted (params echoed in [1:4]) ──
+        if state == 0x00:
+            print(f"✅ Accepted — z_offset={data[1]} mg, "
+                  f"mag_xy={data[2]} mg, jitter={data[3]} mg")
+
+        # ── 0x01: transient condition failure (NOT terminal) ──
+        elif state == 0x01:
+            if sub == 0x01:
+                print(f"   ⚠️ Z-axis misalignment: {_u16(data[2], data[3])} mg "
+                      f"exceeds threshold")
+            elif sub == 0x02:
+                print(f"   ⚠️ XY-plane misalignment: {_u16(data[2], data[3])} mg "
+                      f"off from 1000 mg")
+            elif sub == 0x03:
+                print("   ⚠️ Jitter / movement detected — hold the sensor still")
+            else:
+                print(f"   ⚠️ Condition error (sub=0x{sub:02X})")
+
+        # ── 0x02: SUCCESS — theta*10 (rad) lives in bytes [1:3] ──
+        elif state == 0x02:
+            raw = _s16(data[1], data[2])
+            theta_rad = raw / 10.0
+            theta_deg = theta_rad * 57.29578
+            result["ok"] = True
+            result["theta_deg"] = theta_deg
+            print(f"🎉 Calibration SUCCESS — theta ≈ {theta_deg:+.1f}° "
+                  f"({theta_rad:+.3f} rad, raw={raw})")
+            done.set()
+
+        # ── 0x03: timeout (terminal) ──
+        elif state == 0x03:
+            result["reason"] = "timeout — sensor never stabilized"
+            print("⏱  Calibration TIMED OUT.")
+            done.set()
+
+        else:
+            print(f"[calibrate] unknown state 0x{state:02X}: {data.hex()}")
+
+    def _cb(_handle, data):
+        _decode(bytes(data))
+
+    # ── Subscribe FIRST so no early frame is missed ──────────────
     try:
-        await ctx.client.write_gatt_char(
-            CALIBRATION_UUID,
-            packet,
-            response=False,
-        )
-    except (BleakError, OSError, ValueError) as e:
-        print(f"❌ calibration write failed: {e}")
+        await ctx.client.start_notify(CALIBRATION_UUID, _cb)
+    except (BleakError, OSError) as e:
+        print(f"❌ Could not subscribe to {CALIBRATION_UUID}: {e}")
         return
 
-    print("👋 Sensor Calibration Requested.")
+    try:
+        # ── Kick off calibration ──
+        try:
+            await ctx.client.write_gatt_char(
+                CALIBRATION_UUID, packet, response=False)
+        except (BleakError, OSError, ValueError) as e:
+            print(f"❌ calibration write failed: {e}")
+            return
 
+        print("👋 Sensor Calibration Requested — waiting for result…\n")
+
+        # ── Wait for a terminal frame. Firmware timeout is 5 s
+        #    (CALIBRATION_TIMEOUT), give a little headroom. ──
+        try:
+            await asyncio.wait_for(done.wait(), timeout=8.0)
+        except asyncio.TimeoutError:
+            print("\n❌ No terminal result within 8 s "
+                  "(no success/timeout frame received).")
+            return
+
+        # ── Final summary ──
+        if result["ok"]:
+            print(f"\n✅ Done — rotation theta = {result['theta_deg']:+.2f}°")
+        else:
+            print(f"\n❌ Calibration failed — reason: {result['reason']}")
+
+    finally:
+        try:
+            if ctx.client and ctx.client.is_connected:
+                await ctx.client.stop_notify(CALIBRATION_UUID)
+        except (BleakError, OSError) as e:
+            print(f"stop_notify warning ({CALIBRATION_UUID}): {e}")
 
 # ═════════════════════════════════════════════
 # Watchdog: tear down subscription when ALL plots are closed
