@@ -178,6 +178,294 @@ Each sensor exposes its own editable `PARAMS`. Partial updates are supported —
 
 Configuring a shared‑config sensor (e.g. `imu` ↔ `fft` share `fe51`) automatically refreshes plot titles on **both** active subscriptions.
 
+# Maintenance & Device Management Commands
+
+In addition to sensor streaming, recording, and configuration, the ESS BLE CLI provides a set of maintenance commands for device deployment, calibration, and firmware management.
+
+---
+
+# ⏰ Device Provisioning
+
+Configure the RTC wake-up schedule used by ultra-low-power deployed sensors.
+
+Provisioning is typically performed during installation or commissioning and defines how often the sensor wakes from low-power mode to perform measurements and communications.
+
+## Command
+
+```text
+provision <RTC_OPTION>
+```
+
+## Available Options
+
+```text
+RTC_DISABLRD
+RTC_30_SECS
+RTC_1_MIN
+RTC_15_MIN
+RTC_30_MIN
+RTC_1_HOUR
+RTC_4_HOURS
+RTC_8_HOURS
+RTC_12_HOURS
+RTC_1_DAY
+```
+
+## Example
+
+```text
+(connected 00:80:E1:2A:48:89) ess> provision RTC_1_HOUR
+
+Sensor Provisioning Requested
+
+✅ Successful
+```
+
+## Example Options
+
+```text
+provision RTC_30_SECS
+provision RTC_15_MIN
+provision RTC_1_HOUR
+provision RTC_1_DAY
+```
+
+## Notes
+
+- Used primarily before field deployment.
+- Configures the sensor's RTC wake-up interval.
+- Device confirms provisioning by echoing the configuration packet back to the CLI.
+- Provisioning does not reboot the device.
+
+---
+
+# 🛠 Sensor Calibration
+
+Perform installation calibration for the IMU.
+
+The calibration routine validates:
+
+- Z-axis alignment
+- Gravity vector magnitude
+- Sensor stability (jitter detection)
+
+When calibration succeeds, the device calculates and stores the sensor installation rotation angle.
+
+## Commands
+
+### Default calibration
+
+```text
+calibrate -module imu
+```
+
+### Custom thresholds
+
+```text
+calibrate -module imu \
+          -z_offset <mg> \
+          -mag_xy <mg> \
+          -jitter <mg>
+```
+
+## Example
+
+```text
+(connected 00:80:E1:2A:48:89) ess> calibrate -module imu
+
+🛠 Calibration requested:
+     Module : imu
+
+👋 Sensor Calibration Requested — waiting for result...
+
+✅ Accepted
+
+🎉 Calibration SUCCESS — theta ≈ +23.4°
+     (+0.409 rad)
+
+✅ Done — rotation theta = +23.40°
+```
+
+## Example with custom thresholds
+
+```text
+(connected 00:80:E1:2A:48:89) ess> calibrate -module imu \
+                                             -z_offset 100 \
+                                             -mag_xy 150 \
+                                             -jitter 50
+```
+
+## Possible Calibration Responses
+
+### Z-axis error
+
+```text
+⚠️ Z-axis misalignment: 124 mg exceeds threshold
+```
+
+### XY-plane error
+
+```text
+⚠️ XY-plane misalignment: 183 mg off from 1000 mg
+```
+
+### Motion detected
+
+```text
+⚠️ Jitter / movement detected — hold the sensor still
+```
+
+### Timeout
+
+```text
+⏱ Calibration TIMED OUT.
+```
+
+## Notes
+
+- Sensor should remain stationary during calibration.
+- The reported angle is used by firmware to compensate installation orientation.
+- Calibration thresholds are specified in **mg**.
+- A successful calibration returns both radians and degrees.
+
+---
+
+# 🔄 Firmware Update (FOTA)
+
+Perform a Firmware Update Over The Air (FOTA) using a compiled application image.
+
+The CLI automatically:
+
+1. Validates the firmware image.
+2. Computes the image CRC32.
+3. Sends firmware metadata.
+4. Streams the image page-by-page.
+5. Collects packet acknowledgements.
+6. Reports transfer statistics.
+
+## Command
+
+```text
+update -module fota -file <firmware.bin>
+```
+
+## Example
+
+```text
+(connected 00:80:E1:2A:48:89) ess> update -module fota -file firmware.bin
+```
+
+## Example Output
+
+```text
+📦 FOTA file selected:
+
+     File              : firmware.bin
+     Path              : firmware.bin
+     Version           : @v1.2.3
+     Original size     : 169947 B
+     Image CRC32       : 0x215AB499
+     Flash page size   : 8192 B
+     Pages             : 21
+     Page padding      : 2085 B
+     Payload           : 224 B/packet
+     Packets/page      : 37
+     Total packets     : 777
+
+FOTA Accepted. Proceeding...
+
+🚀 Sending FOTA: 777/777 packets (100.0%)
+
+✅ FOTA file streaming complete:
+
+     FW size           : 169947 B
+     Image CRC32       : 0x215AB499
+     Flash pages       : 21
+     Sent              : 777/777
+     ACK'd unique      : 37
+     Duplicates        : 740
+     Bad-length        : 0
+     Throughput        : 25.62 KB/s firmware
+     Est. 500 KB       : 20.0 s
+     Missing           : 0 🎉 all packets ACK'd
+```
+
+## Transfer Characteristics
+
+### Firmware Image
+
+```text
+.bin application image
+```
+
+### Flash Page Size
+
+```text
+8192 bytes
+```
+
+### BLE Payload Size
+
+```text
+224 bytes
+```
+
+### Transport Packet Size
+
+```text
+240 bytes
+```
+
+### Integrity Protection
+
+```text
+CRC32 per packet
+CRC32 for complete image
+```
+
+## Notes
+
+- Only `.bin` files are supported.
+- Firmware is automatically split into flash pages.
+- Each page is transported using 37 BLE packets.
+- The device validates packet CRCs before writing.
+- Firmware activation and installation behavior is firmware-dependent.
+- Transfer statistics are displayed when streaming completes.
+
+---
+
+# Maintenance Workflow Example
+
+## Provision a device
+
+```text
+(connected ...) ess> provision RTC_4_HOURS
+
+Sensor Provisioning Requested
+
+✅ Successful
+```
+
+## Calibrate installation
+
+```text
+(connected ...) ess> calibrate -module imu
+
+🎉 Calibration SUCCESS
+✅ Done — rotation theta = +18.7°
+```
+
+## Update firmware
+
+```text
+(connected ...) ess> update -module fota -file ess_fw_v1_2_3.bin
+
+✅ FOTA file streaming complete
+```
+
+These commands are intended for deployment, commissioning, maintenance, and firmware lifecycle management of ESS Smart Sensors.
+
+
 ### CSV recording (must be `subscribed`)
 
 Long‑format CSVs are written to `measurements/` (auto‑created).
