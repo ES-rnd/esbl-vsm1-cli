@@ -17,6 +17,7 @@ COMMANDS = [
     "record", "stop_record",
     "configure",
     "calibrate",
+    "provision",
     "update",
     "clear", "help", "exit",
 ]
@@ -207,6 +208,46 @@ class EssCompleter(Completer):
                         yield Completion(key, start_position=-len(partial))
 
                 return
+
+                # provision -> -wup <wake_period>
+        if cmd == "provision":
+            next_is_partial = not text.endswith(" ")
+            partial = tokens[-1] if next_is_partial else ""
+            prev = tokens[-2 if next_is_partial else -1] if len(tokens) > 1 else ""
+
+            WUP_OPTIONS = (
+                "RTC_DISABLRD",
+                "RTC_30_SECS",
+                "RTC_1_MIN",
+                "RTC_15_MIN",
+                "RTC_30_MIN",
+                "RTC_1_HOUR",
+                "RTC_4_HOURS",
+                "RTC_8_HOURS",
+                "RTC_12_HOURS",
+                "RTC_1_DAY",
+            )
+
+            # right after -wup -> suggest wakeup values
+            if prev == "-wup":
+                for opt in WUP_OPTIONS:
+                    if opt.startswith(partial):
+                        yield Completion(
+                            opt,
+                            start_position=-len(partial),
+                        )
+                return
+
+            # suggest -wup flag
+            if "-wup" not in tokens:
+                if "-wup".startswith(partial):
+                    yield Completion(
+                        "-wup",
+                        start_position=-len(partial),
+                    )
+                return
+
+            return
 
         # 5) record / stop_record → -module <key> [-out <file>]
         if cmd in ("record", "stop_record"):

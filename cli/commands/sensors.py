@@ -980,6 +980,54 @@ async def cmd_unsubscribe(value: str):
     print(f"👋 Unsubscribed from '{value}'.")
 
 
+async def cmd_provision(wup: str):
+    if not require_connected():
+        return
+
+    PROVISION_UUID = "0000fe44-8e22-4541-9d4c-21edae82ed19"
+
+    WUP_OPTIONS = {
+        "RTC_DISABLRD": 0,
+        "RTC_30_SECS": 1,
+        "RTC_1_MIN": 2,
+        "RTC_15_MIN": 3,
+        "RTC_30_MIN": 4,
+        "RTC_1_HOUR": 5,
+        "RTC_4_HOURS": 6,
+        "RTC_8_HOURS": 7,
+        "RTC_12_HOURS": 8,
+        "RTC_1_DAY": 9,
+    }
+
+    packet = [1, WUP_OPTIONS[wup], 0, 0, 0, 0, 0, 0, 0, 0]
+
+    payload = bytes(packet)
+
+    def _cb(_handle, data):
+        result = bytes(data)
+
+        if payload == result:
+            print("\n✅ Sucessfull")
+
+    # ── Subscribe FIRST so no early frame is missed ──────────────
+    try:
+        await ctx.client.start_notify(PROVISION_UUID, _cb)
+    except (BleakError, OSError) as e:
+        print(f"❌ Could not subscribe to {PROVISION_UUID}: {e}")
+        return
+
+    await asyncio.sleep(0.5)
+
+    print("Sensor Provisioning Requested")
+
+    try:
+        await ctx.client.write_gatt_char(
+            PROVISION_UUID, payload, response=False)
+    except (BleakError, OSError, ValueError) as e:
+        print(f"❌ calibration write failed: {e}")
+        return
+
+
 async def cmd_calibrate(value: str, kv: dict):
     """
         Calibrate a sensor module.

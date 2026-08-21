@@ -12,7 +12,7 @@ from .prompt import make_prompt
 from .commands.scan import cmd_scan, cmd_stop, cmd_list_devices, cmd_clear
 from .commands.connection import cmd_connect, cmd_disconnect
 from .commands.gatt import cmd_list_services, cmd_list_characteristics
-from .commands.sensors import cmd_subscribe, cmd_unsubscribe, cmd_calibrate, cmd_configure, cmd_update, cmd_record, cmd_stop_record    # noqa
+from .commands.sensors import cmd_subscribe, cmd_unsubscribe, cmd_provision, cmd_calibrate, cmd_configure, cmd_update, cmd_record, cmd_stop_record    # noqa
 from .commands.help import cmd_help
 
 
@@ -124,6 +124,11 @@ async def repl(stop: asyncio.Event):
             elif cmd == "list_characteristics":
                 svc = _extract_flag(args, "--service")
                 await cmd_list_characteristics(svc)
+
+            elif cmd == "provision":
+                wup = _extract_flag(args, "-wup")
+
+                await cmd_provision(wup)
 
             # configure -module <sensor> [-<param> <value> ...]   schema-driven
             elif cmd == "configure" or cmd == "update" or cmd == "calibrate":
