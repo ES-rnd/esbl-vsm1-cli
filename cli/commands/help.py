@@ -36,8 +36,17 @@ def cmd_help() -> Any:
         
         configure -module fft  -axis <x|y|z>
                                -mode <low|high>
-                                
                                             (connected) Write sensor config (partial OK)
+
+        calibrate -module <imu> -z_offset <10-100mg>
+                                -mag_xy <10-100mg>
+                                -jitter <10-100mg>
+                                            (connected) Calibrate XY plane direction. The sensor
+                                            must be placed so z-axis is close to zero
+                                
+        provision -wup <RTC_DISABLED|RTC_30_SECS|RTC_1_MIN|...>
+                                            (connected) Set Wake-up Period for advertisement.
+                                            RTC_DISABLED: stops period wake-up.
 
         clear                               Clear known devices JSON
         help                                Show this help

@@ -216,7 +216,7 @@ class EssCompleter(Completer):
             prev = tokens[-2 if next_is_partial else -1] if len(tokens) > 1 else ""
 
             WUP_OPTIONS = (
-                "RTC_DISABLRD",
+                "RTC_DISABLED",
                 "RTC_30_SECS",
                 "RTC_1_MIN",
                 "RTC_15_MIN",
