@@ -193,7 +193,7 @@ Provisioning is typically performed during installation or commissioning and def
 ## Command
 
 ```text
-provision <RTC_OPTION>
+provision -wup <RTC_OPTION>
 ```
 
 ## Available Options
@@ -214,7 +214,7 @@ RTC_1_DAY
 ## Example
 
 ```text
-(connected 00:80:E1:2A:48:89) ess> provision RTC_1_HOUR
+(connected 00:80:E1:2A:48:89) ess> provision -wup RTC_1_HOUR
 
 Sensor Provisioning Requested
 
@@ -224,10 +224,10 @@ Sensor Provisioning Requested
 ## Example Options
 
 ```text
-provision RTC_30_SECS
-provision RTC_15_MIN
-provision RTC_1_HOUR
-provision RTC_1_DAY
+provision -wup RTC_30_SECS
+provision -wup RTC_15_MIN
+provision -wup RTC_1_HOUR
+provision -wup RTC_1_DAY
 ```
 
 ## Notes
